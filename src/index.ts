@@ -8,7 +8,8 @@ import jwksClient from "jwks-rsa";
 
 // PostgreSQL connection (Fix for ES Modules)
 const { Pool } = pkg;
-console.log("✅ PostgreSQL module loaded:", pg);
+console.log("✅ PostgreSQL module loaded:", pkg);
+
 
 // Load environment variables
 dotenv.config();
