@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
-import pkg from "pg";
+import * as pkg from "pg";
 import dotenv from "dotenv";
 import axios from "axios";
 import jwt from "jsonwebtoken";
@@ -8,6 +8,7 @@ import jwksClient from "jwks-rsa";
 
 // PostgreSQL connection (Fix for ES Modules)
 const { Pool } = pkg;
+console.log("✅ PostgreSQL module loaded:", pg);
 
 // Load environment variables
 dotenv.config();
