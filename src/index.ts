@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
-import * as pkg from "pg";
+import pkg from "pg";
 import dotenv from "dotenv";
 import axios from "axios";
 import jwt from "jsonwebtoken";
