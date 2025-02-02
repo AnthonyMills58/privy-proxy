@@ -1,15 +1,21 @@
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
-import { Pool } from "pg";
+import pkg from "pg";
 import dotenv from "dotenv";
 import axios from "axios";
 import jwt from "jsonwebtoken";
+import jwksClient from "jwks-rsa";
+
+// PostgreSQL connection (Fix for ES Modules)
+const { Pool } = pkg;
 
 // Load environment variables
 dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 4000;
+const ENVIRONMENT = process.env.ENVIRONMENT || "local";
+const PRIVY_APP_ID = process.env.PRIVY_APP_ID!;
+const JWKS_ENDPOINT = `https://auth.privy.io/api/v1/apps/${PRIVY_APP_ID}/jwks.json`;
 
 // PostgreSQL connection
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -17,11 +23,58 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 app.use(cors());
 app.use(express.json());
 
+
+declare module "express-serve-static-core" {
+    interface Request {
+        user?: any;  // Adjust `any` if you have a specific user type
+    }
+}
+
+/**
+ * ✅ JWKS-Based JWT Verification Middleware
+ */
+const jwks = jwksClient({ jwksUri: JWKS_ENDPOINT });
+
+const getKey = (header: any, callback: any) => {
+    jwks.getSigningKey(header.kid, (err, key) => {
+        if (err || !key) {
+            callback(new Error("Signing key not found"), null);
+            return;
+        }
+
+        const signingKey = key.getPublicKey ? key.getPublicKey() : (key as any).rsaPublicKey;
+        callback(null, signingKey);
+    });
+};
+
+
+const verifyJWT = (req: Request, res: Response, next: NextFunction): void => {
+    const token = req.headers.authorization?.split(" ")[1]; // Extract Bearer token
+    if (!token) {
+        res.status(401).json({ error: "Token not provided" });
+        return;
+    }
+
+    jwt.verify(token, getKey, { algorithms: ["RS256"] }, (err, decoded) => {
+        if (err) {
+            res.status(401).json({ error: "Invalid token" });
+            return;
+        }
+        req.user = decoded;
+        next();
+    });
+};
+
+
 /**
  * ✅ Health Check Route
  */
 app.get("/health", (req: Request, res: Response) => {
-    res.json({ status: "OK", message: "Privy Proxy Backend is running 🚀" });
+    res.json({
+        status: "OK",
+        message: "Privy Proxy Backend is running 🚀",
+        environment: ENVIRONMENT,
+    });
 });
 
 /**
@@ -35,8 +88,9 @@ app.get("/login", (req: Request, res: Response) => {
 /**
  * ✅ Discord OAuth2 Callback Handler
  */
-app.get("/callback", async (req: Request, res: Response) => {
+app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     const code = req.query.code as string;
+    
     if (!code) {
         res.status(400).json({ error: "No code provided" });
         return;
@@ -77,18 +131,20 @@ app.get("/callback", async (req: Request, res: Response) => {
     }
 });
 
+
 /**
  * ✅ Retrieve JWT Token for a User (Used by the Bot)
  */
-app.get("/privy-token", async (req: Request, res: Response) => {
-    const discordUserId = req.query.user_id as string;
-    if (!discordUserId) {
-        res.status(400).json({ error: "No user ID provided" });
-        return;
-    }
-
+app.get("/privy-token", verifyJWT, async (req: Request, res: Response): Promise<void> => {
     try {
+        const discordUserId = req.query.user_id as string;
+        if (!discordUserId) {
+            res.status(400).json({ error: "No user ID provided" });
+            return;
+        }
+
         const result = await pool.query("SELECT jwt FROM user_wallets WHERE discord_id = $1", [discordUserId]);
+
         if (result.rows.length === 0) {
             res.status(404).json({ error: "User not found" });
             return;
@@ -101,26 +157,27 @@ app.get("/privy-token", async (req: Request, res: Response) => {
     }
 });
 
+
+
 /**
  * ✅ Set Active Wallet for a User
  */
-app.post("/privy/setWallet", async (req: Request, res: Response) => {
-    const { user_id, wallet_address } = req.body;
-
-    if (!user_id || !wallet_address) {
-        res.status(400).json({ error: "User ID and wallet address are required" });
-        return;
-    }
-
+app.post("/privy/setWallet", verifyJWT, async (req: Request, res: Response): Promise<void> => {
     try {
-        // Check if wallet exists for user
+        const { user_id, wallet_address } = req.body;
+
+        if (!user_id || !wallet_address) {
+            res.status(400).json({ error: "User ID and wallet address are required" });
+            return;
+        }
+
         const walletCheck = await pool.query("SELECT * FROM user_wallets WHERE discord_id = $1 AND wallet_address = $2", [user_id, wallet_address]);
+
         if (walletCheck.rows.length === 0) {
             res.status(404).json({ error: "Wallet not found for this user." });
             return;
         }
 
-        // Set the selected wallet as active
         await pool.query("UPDATE user_wallets SET is_active = FALSE WHERE discord_id = $1", [user_id]);
         await pool.query("UPDATE user_wallets SET is_active = TRUE WHERE discord_id = $1 AND wallet_address = $2", [user_id, wallet_address]);
 
@@ -134,15 +191,15 @@ app.post("/privy/setWallet", async (req: Request, res: Response) => {
 /**
  * ✅ Get Active Wallet for a User
  */
-app.get("/privy/getActiveWallet", async (req: Request, res: Response) => {
-    const user_id = req.query.user_id as string;
-
-    if (!user_id) {
-        res.status(400).json({ error: "User ID is required" });
-        return;
-    }
-
+app.get("/privy/getActiveWallet", verifyJWT, async (req: Request, res: Response): Promise<void> => {
     try {
+        const user_id = req.query.user_id as string;
+
+        if (!user_id) {
+            res.status(400).json({ error: "User ID is required" });
+            return;
+        }
+
         const result = await pool.query("SELECT wallet_address FROM user_wallets WHERE discord_id = $1 AND is_active = TRUE", [user_id]);
 
         if (result.rows.length === 0) {
@@ -150,18 +207,20 @@ app.get("/privy/getActiveWallet", async (req: Request, res: Response) => {
             return;
         }
 
-        res.json({ active_wallet: result.rows[0].wallet_address });
+        res.json({ active_wallet: result.rows[0].wallet_address }); // ✅ Correct return
     } catch (error) {
         console.error("Database error:", error);
         res.status(500).json({ error: "Failed to retrieve active wallet." });
     }
 });
 
+
 /**
  * ✅ Start Express Server
  */
 app.listen(PORT, () => {
-    console.log(`✅ Privy Proxy Backend running on port ${PORT}`);
+    console.log(`✅ Privy Proxy Backend running on port ${PORT} in ${ENVIRONMENT} mode`);
 });
+
 
 
