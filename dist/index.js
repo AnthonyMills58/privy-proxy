@@ -1,22 +1,61 @@
 import express from "express";
 import cors from "cors";
-import { Pool } from "pg";
+import pkg from "pg";
 import dotenv from "dotenv";
 import axios from "axios";
 import jwt from "jsonwebtoken";
+import jwksClient from "jwks-rsa";
+// PostgreSQL connection (Fix for ES Modules)
+const { Pool } = pkg;
 // Load environment variables
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 4000;
+const ENVIRONMENT = process.env.ENVIRONMENT || "local";
+const PRIVY_APP_ID = process.env.PRIVY_APP_ID;
+const JWKS_ENDPOINT = `https://auth.privy.io/api/v1/apps/${PRIVY_APP_ID}/jwks.json`;
 // PostgreSQL connection
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 app.use(cors());
 app.use(express.json());
 /**
+ * ✅ JWKS-Based JWT Verification Middleware
+ */
+const jwks = jwksClient({ jwksUri: JWKS_ENDPOINT });
+const getKey = (header, callback) => {
+    jwks.getSigningKey(header.kid, (err, key) => {
+        if (err || !key) {
+            callback(new Error("Signing key not found"), null);
+            return;
+        }
+        const signingKey = key.getPublicKey ? key.getPublicKey() : key.rsaPublicKey;
+        callback(null, signingKey);
+    });
+};
+const verifyJWT = (req, res, next) => {
+    const token = req.headers.authorization?.split(" ")[1]; // Extract Bearer token
+    if (!token) {
+        res.status(401).json({ error: "Token not provided" });
+        return;
+    }
+    jwt.verify(token, getKey, { algorithms: ["RS256"] }, (err, decoded) => {
+        if (err) {
+            res.status(401).json({ error: "Invalid token" });
+            return;
+        }
+        req.user = decoded;
+        next();
+    });
+};
+/**
  * ✅ Health Check Route
  */
 app.get("/health", (req, res) => {
-    res.json({ status: "OK", message: "Privy Proxy Backend is running 🚀" });
+    res.json({
+        status: "OK",
+        message: "Privy Proxy Backend is running 🚀",
+        environment: ENVIRONMENT,
+    });
 });
 /**
  * ✅ Start Discord OAuth2 Login
@@ -51,8 +90,8 @@ app.get("/callback", async (req, res) => {
         const discordUserId = userResponse.data.id;
         // Generate JWT for user
         const jwtToken = jwt.sign({ discordUserId }, process.env.PRIVY_SECRET_KEY, { expiresIn: "1h" });
-        // Store token in PostgreSQL
-        await pool.query("INSERT INTO user_tokens (discord_id, jwt) VALUES ($1, $2) ON CONFLICT (discord_id) DO UPDATE SET jwt = $2", [discordUserId, jwtToken]);
+        // Store or update token in PostgreSQL
+        await pool.query("INSERT INTO user_wallets (discord_id, privy_user_id, jwt, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour') ON CONFLICT (discord_id) DO UPDATE SET jwt = $3, expires_at = NOW() + INTERVAL '1 hour'", [discordUserId, discordUserId, jwtToken]);
         res.json({ message: "Logged in successfully", token: jwtToken });
     }
     catch (error) {
@@ -63,14 +102,14 @@ app.get("/callback", async (req, res) => {
 /**
  * ✅ Retrieve JWT Token for a User (Used by the Bot)
  */
-app.get("/privy-token", async (req, res) => {
-    const discordUserId = req.query.user_id;
-    if (!discordUserId) {
-        res.status(400).json({ error: "No user ID provided" });
-        return;
-    }
+app.get("/privy-token", verifyJWT, async (req, res) => {
     try {
-        const result = await pool.query("SELECT jwt FROM user_tokens WHERE discord_id = $1", [discordUserId]);
+        const discordUserId = req.query.user_id;
+        if (!discordUserId) {
+            res.status(400).json({ error: "No user ID provided" });
+            return;
+        }
+        const result = await pool.query("SELECT jwt FROM user_wallets WHERE discord_id = $1", [discordUserId]);
         if (result.rows.length === 0) {
             res.status(404).json({ error: "User not found" });
             return;
@@ -83,8 +122,54 @@ app.get("/privy-token", async (req, res) => {
     }
 });
 /**
+ * ✅ Set Active Wallet for a User
+ */
+app.post("/privy/setWallet", verifyJWT, async (req, res) => {
+    try {
+        const { user_id, wallet_address } = req.body;
+        if (!user_id || !wallet_address) {
+            res.status(400).json({ error: "User ID and wallet address are required" });
+            return;
+        }
+        const walletCheck = await pool.query("SELECT * FROM user_wallets WHERE discord_id = $1 AND wallet_address = $2", [user_id, wallet_address]);
+        if (walletCheck.rows.length === 0) {
+            res.status(404).json({ error: "Wallet not found for this user." });
+            return;
+        }
+        await pool.query("UPDATE user_wallets SET is_active = FALSE WHERE discord_id = $1", [user_id]);
+        await pool.query("UPDATE user_wallets SET is_active = TRUE WHERE discord_id = $1 AND wallet_address = $2", [user_id, wallet_address]);
+        res.json({ message: "Active wallet updated successfully." });
+    }
+    catch (error) {
+        console.error("Database error:", error);
+        res.status(500).json({ error: "Failed to update active wallet." });
+    }
+});
+/**
+ * ✅ Get Active Wallet for a User
+ */
+app.get("/privy/getActiveWallet", verifyJWT, async (req, res) => {
+    try {
+        const user_id = req.query.user_id;
+        if (!user_id) {
+            res.status(400).json({ error: "User ID is required" });
+            return;
+        }
+        const result = await pool.query("SELECT wallet_address FROM user_wallets WHERE discord_id = $1 AND is_active = TRUE", [user_id]);
+        if (result.rows.length === 0) {
+            res.status(404).json({ error: "No active wallet found for this user." });
+            return;
+        }
+        res.json({ active_wallet: result.rows[0].wallet_address }); // ✅ Correct return
+    }
+    catch (error) {
+        console.error("Database error:", error);
+        res.status(500).json({ error: "Failed to retrieve active wallet." });
+    }
+});
+/**
  * ✅ Start Express Server
  */
 app.listen(PORT, () => {
-    console.log(`✅ Privy Proxy Backend running on port ${PORT}`);
+    console.log(`✅ Privy Proxy Backend running on port ${PORT} in ${ENVIRONMENT} mode`);
 });
