@@ -93,9 +93,11 @@ app.get("/login", (req: Request, res: Response) => {
 app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     const code = req.query.code as string;
     const privyUserId = req.query.privy_user_id as string; // ✅ Expect `privy_user_id` from frontend
+    const walletAddress = "DEFAULT_WALLET"; // ✅ Use a default value for now
 
     console.log("🔹 Received authorization code:", code);
     console.log("🔹 Received privy_user_id:", privyUserId);
+    console.log("🔹 Using wallet_address:", walletAddress);
 
     if (!code || !privyUserId) {
         res.status(400).json({ error: "Missing code or privy_user_id" });
@@ -126,12 +128,17 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
         // Generate JWT for user
         const jwtToken = jwt.sign({ privyUserId, discordUserId }, process.env.PRIVY_SECRET_KEY!, { expiresIn: "1h" });
 
-        await pool.query(
-            "INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at) VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour') ON CONFLICT (privy_user_id, wallet_address) DO UPDATE SET jwt = $4, expires_at = NOW() + INTERVAL '1 hour'",
-            [discordUserId, privyUserId, "DEFAULT_WALLET", jwtToken]
+        console.log("🔹 Inserting/updating user_wallets...");
+        const result = await pool.query(
+            `INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at) 
+             VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour') 
+             ON CONFLICT (privy_user_id, wallet_address) 
+             DO UPDATE SET jwt = $4, expires_at = NOW() + INTERVAL '1 hour'
+             RETURNING *`,  // ✅ Ensures we can log the inserted/updated row
+            [discordUserId, privyUserId, walletAddress, jwtToken]
         );
 
-        console.log("✅ User authenticated and JWT stored.");
+        console.log("✅ Inserted/Updated row:", result.rows[0]); // ✅ Confirm success
         res.json({ message: "Logged in successfully", token: jwtToken });
 
     } catch (error: any) {
