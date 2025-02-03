@@ -92,14 +92,15 @@ app.get("/login", (req: Request, res: Response) => {
  */
 app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     const code = req.query.code as string;
-    const privyUserId = req.query.privy_user_id as string; // ✅ Expect `privy_user_id` from frontend
-    const walletAddress = "DEFAULT_WALLET"; // ✅ Use a default value for now
+    const privyUserId = req.query.privy_user_id as string;
+    const walletAddress = "DEFAULT_WALLET"; // ✅ Ensure wallet_address is defined
 
     console.log("🔹 Received authorization code:", code);
     console.log("🔹 Received privy_user_id:", privyUserId);
     console.log("🔹 Using wallet_address:", walletAddress);
 
     if (!code || !privyUserId) {
+        console.error("❌ Missing required parameters.");
         res.status(400).json({ error: "Missing code or privy_user_id" });
         return;
     }
@@ -128,24 +129,37 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
         // Generate JWT for user
         const jwtToken = jwt.sign({ privyUserId, discordUserId }, process.env.PRIVY_SECRET_KEY!, { expiresIn: "1h" });
 
-        console.log("🔹 Inserting/updating user_wallets...");
-        const result = await pool.query(
-            `INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at)
-            VALUES ('123456789', 'privy_123', '0xABC123...', 'test-jwt-token', NOW() + INTERVAL '1 hour')
-            ON CONFLICT (privy_user_id, wallet_address)
-            DO UPDATE SET jwt = EXCLUDED.jwt, expires_at = NOW() + INTERVAL '1 hour'
-            RETURNING *`,  // ✅ Ensures we can log the inserted/updated row
-            [discordUserId, privyUserId, walletAddress, jwtToken]
-        );
+        console.log("🔹 Preparing to insert into database...");
+        console.log("   Discord ID:", discordUserId);
+        console.log("   Privy User ID:", privyUserId);
+        console.log("   Wallet Address:", walletAddress);
+        console.log("   JWT:", jwtToken);
 
-        console.log("✅ Inserted/Updated row:", result.rows[0]); // ✅ Confirm success
-        res.json({ message: "Logged in successfully", token: jwtToken });
+        try {
+            console.log("🔹 Executing SQL query...");
+            const result = await pool.query(
+                `INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at) 
+                 VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour') 
+                 ON CONFLICT (privy_user_id, wallet_address) 
+                 DO UPDATE SET jwt = EXCLUDED.jwt, expires_at = NOW() + INTERVAL '1 hour'
+                 RETURNING *`,
+                [discordUserId, privyUserId, walletAddress, jwtToken]
+            );
+
+            console.log("✅ Inserted/Updated row:", result.rows[0]);
+            res.json({ message: "Logged in successfully", token: jwtToken });
+
+        } catch (dbError: any) {
+            console.error("❌ Database query failed:", dbError.message);
+            res.status(500).json({ error: "Database insert/update failed", details: dbError.message });
+        }
 
     } catch (error: any) {
         console.error("❌ OAuth error:", error.response?.data || error.message);
         res.status(500).json({ error: "Failed to authenticate", details: error.response?.data || error.message });
     }
 });
+
 
 
 
