@@ -130,11 +130,11 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
 
         console.log("🔹 Inserting/updating user_wallets...");
         const result = await pool.query(
-            `INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at) 
-             VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour') 
-             ON CONFLICT (privy_user_id, wallet_address) 
-             DO UPDATE SET jwt = $4, expires_at = NOW() + INTERVAL '1 hour'
-             RETURNING *`,  // ✅ Ensures we can log the inserted/updated row
+            `INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at)
+            VALUES ('123456789', 'privy_123', '0xABC123...', 'test-jwt-token', NOW() + INTERVAL '1 hour')
+            ON CONFLICT (privy_user_id, wallet_address)
+            DO UPDATE SET jwt = EXCLUDED.jwt, expires_at = NOW() + INTERVAL '1 hour'
+            RETURNING *`,  // ✅ Ensures we can log the inserted/updated row
             [discordUserId, privyUserId, walletAddress, jwtToken]
         );
 
