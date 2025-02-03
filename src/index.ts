@@ -134,7 +134,7 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
         console.log("   Privy User ID:", privyUserId);
         console.log("   Wallet Address:", walletAddress);
         console.log("   JWT:", jwtToken);
-/*
+
         try {
             console.log("🔹 Executing SQL query...");
             const result = await pool.query(
@@ -154,8 +154,8 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
             console.error("❌ Database query failed:", dbError.message);
             res.status(500).json({ error: "Database insert/update failed", details: dbError.message });
         }
-*/
-        res.json({ message: "Debugging: Reached end of function", token: jwtToken });
+
+        //res.json({ message: "Debugging: Reached end of function", token: jwtToken });
 
     } catch (error: any) {
         console.error("❌ OAuth error:", error.response?.data || error.message);
