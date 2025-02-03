@@ -7,6 +7,7 @@ import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
 // PostgreSQL connection (Fix for ES Modules)
 const { Pool } = pkg;
+console.log("✅ PostgreSQL module loaded:", pkg);
 // Load environment variables
 dotenv.config();
 const app = express();
@@ -69,34 +70,66 @@ app.get("/login", (req, res) => {
  */
 app.get("/callback", async (req, res) => {
     const code = req.query.code;
-    if (!code) {
-        res.status(400).json({ error: "No code provided" });
+    const privyUserId = req.query.privy_user_id;
+    const walletAddress = "DEFAULT_WALLET"; // ✅ Ensure wallet_address is defined
+    console.log("🔹 Received authorization code:", code);
+    console.log("🔹 Received privy_user_id:", privyUserId);
+    console.log("🔹 Using wallet_address:", walletAddress);
+    if (!code || !privyUserId) {
+        console.error("❌ Missing required parameters.");
+        res.status(400).json({ error: "Missing code or privy_user_id" });
         return;
     }
     try {
-        // Exchange code for Discord access token
-        const tokenResponse = await axios.post("https://discord.com/api/oauth2/token", new URLSearchParams({
+        console.log("🔹 Exchanging code for token...");
+        const tokenResponse = await axios.post("https://discord.com/api/v10/oauth2/token", new URLSearchParams({
             client_id: process.env.DISCORD_CLIENT_ID,
             client_secret: process.env.DISCORD_CLIENT_SECRET,
             grant_type: "authorization_code",
             code,
             redirect_uri: process.env.DISCORD_REDIRECT_URI,
         }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+        console.log("✅ Token exchange response:", tokenResponse.data);
         const accessToken = tokenResponse.data.access_token;
-        // Get user info from Discord API
+        console.log("🔹 Fetching user info...");
         const userResponse = await axios.get("https://discord.com/api/users/@me", {
             headers: { Authorization: `Bearer ${accessToken}` },
         });
+        console.log("✅ Discord user data:", userResponse.data);
         const discordUserId = userResponse.data.id;
         // Generate JWT for user
-        const jwtToken = jwt.sign({ discordUserId }, process.env.PRIVY_SECRET_KEY, { expiresIn: "1h" });
-        // Store or update token in PostgreSQL
-        await pool.query("INSERT INTO user_wallets (discord_id, privy_user_id, jwt, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour') ON CONFLICT (discord_id) DO UPDATE SET jwt = $3, expires_at = NOW() + INTERVAL '1 hour'", [discordUserId, discordUserId, jwtToken]);
-        res.json({ message: "Logged in successfully", token: jwtToken });
+        const jwtToken = jwt.sign({ privyUserId, discordUserId }, process.env.PRIVY_SECRET_KEY, { expiresIn: "1h" });
+        console.log("🔹 Preparing to insert into database...");
+        console.log("   Discord ID:", discordUserId);
+        console.log("   Privy User ID:", privyUserId);
+        console.log("   Wallet Address:", walletAddress);
+        console.log("   JWT:", jwtToken);
+        /*
+                try {
+                    console.log("🔹 Executing SQL query...");
+                    const result = await pool.query(
+                        `INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at)
+                         VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour')
+                         ON CONFLICT (privy_user_id, wallet_address)
+                         DO UPDATE SET jwt = EXCLUDED.jwt, expires_at = NOW() + INTERVAL '1 hour'
+                         RETURNING *`,
+                        [discordUserId, privyUserId, walletAddress, jwtToken]
+                    );
+        
+                    console.log("✅ Inserted/Updated row:", result.rows[0]);
+        
+                    res.json({ message: "Logged in successfully", token: jwtToken });
+        
+                } catch (dbError: any) {
+                    console.error("❌ Database query failed:", dbError.message);
+                    res.status(500).json({ error: "Database insert/update failed", details: dbError.message });
+                }
+        */
+        res.json({ message: "Debugging: Reached end of function", token: jwtToken });
     }
     catch (error) {
-        console.error("OAuth error:", error);
-        res.status(500).json({ error: "Failed to authenticate" });
+        console.error("❌ OAuth error:", error.response?.data || error.message);
+        res.status(500).json({ error: "Failed to authenticate", details: error.response?.data || error.message });
     }
 });
 /**
@@ -136,8 +169,10 @@ app.post("/privy/setWallet", verifyJWT, async (req, res) => {
             res.status(404).json({ error: "Wallet not found for this user." });
             return;
         }
-        await pool.query("UPDATE user_wallets SET is_active = FALSE WHERE discord_id = $1", [user_id]);
-        await pool.query("UPDATE user_wallets SET is_active = TRUE WHERE discord_id = $1 AND wallet_address = $2", [user_id, wallet_address]);
+        /*
+                await pool.query("UPDATE user_wallets SET is_active = FALSE WHERE discord_id = $1", [user_id]);
+                await pool.query("UPDATE user_wallets SET is_active = TRUE WHERE discord_id = $1 AND wallet_address = $2", [user_id, wallet_address]);
+        */
         res.json({ message: "Active wallet updated successfully." });
     }
     catch (error) {
