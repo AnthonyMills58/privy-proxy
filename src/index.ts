@@ -5,6 +5,8 @@ import dotenv from "dotenv";
 import axios from "axios";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
+import { getPrivyUser, createPrivyUser, assignWalletToUser } from "./utils.js";
+
 
 // PostgreSQL connection (Fix for ES Modules)
 const { Pool } = pkg;
@@ -92,7 +94,7 @@ app.get("/login", (req: Request, res: Response) => {
  */
 app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     const code = req.query.code as string;
-    let privyUserId = req.query.privy_user_id as string; // ✅ Może być pusty, więc sprawdzimy to niżej
+    let privyUserId = req.query.privy_user_id as string;
     const walletAddress = "DEFAULT_WALLET";
 
     console.log("🔹 Received authorization code:", code);
@@ -127,16 +129,27 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
 
         // ✅ Pobierz `privy_user_id`, jeśli nie został przekazany
         if (!privyUserId) {
-            console.log("🔹 Fetching or creating Privy user...");
+            console.log("🔹 Checking if user exists in Privy...");
             try {
-                const privyResponse = await axios.post("https://auth.privy.io/api/v1/users", {
-                    discord_id: discordUserId
-                }, {
+                const privyResponse = await axios.get(`https://auth.privy.io/api/v1/users?external_id=${discordUserId}`, {
                     headers: { "Authorization": `Bearer ${process.env.PRIVY_SECRET_KEY}` }
                 });
 
-                privyUserId = privyResponse.data.id;
-                console.log("✅ Privy user created or found:", privyUserId);
+                if (privyResponse.data && privyResponse.data.length > 0) {
+                    privyUserId = privyResponse.data[0].id;
+                    console.log("✅ User found in Privy:", privyUserId);
+                } else {
+                    console.log("❌ User not found in Privy. Creating new user...");
+                    const createResponse = await axios.post("https://auth.privy.io/api/v1/users", {
+                        external_id: discordUserId
+                    }, {
+                        headers: { "Authorization": `Bearer ${process.env.PRIVY_SECRET_KEY}` }
+                    });
+
+                    privyUserId = createResponse.data.id;
+                    console.log("✅ Privy user created:", privyUserId);
+                }
+
             } catch (privyError: any) {
                 console.error("❌ Failed to fetch/create Privy user:", privyError.message);
                 res.status(500).json({ error: "Failed to initialize Privy user" });
@@ -177,6 +190,7 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
         res.status(500).json({ error: "Failed to authenticate", details: error.response?.data || error.message });
     }
 });
+
 
 
 
