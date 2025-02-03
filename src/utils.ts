@@ -70,3 +70,39 @@ export async function assignWalletToUser(privyUserId: string): Promise<string | 
     }
 }
 
+
+/**
+ * ✅ Pobiera `privy_user_id` lub tworzy użytkownika, jeśli nie istnieje
+ */
+export async function getOrCreatePrivyUser(discordUserId: string): Promise<string | null> {
+    try {
+        console.log("🔹 Checking if user exists in Privy...");
+
+        // 1️⃣ Sprawdzamy, czy użytkownik istnieje w Privy
+        const response = await axios.get(`https://auth.privy.io/api/v1/users?external_id=${discordUserId}`, {
+            headers: { "Authorization": `Bearer ${process.env.PRIVY_SECRET_KEY}` }
+        });
+
+        if (response.data && response.data.length > 0) {
+            console.log("✅ User found in Privy:", response.data[0].id);
+            return response.data[0].id;
+        }
+
+        console.log("❌ User not found in Privy. Creating new user...");
+
+        // 2️⃣ Jeśli użytkownik nie istnieje, tworzymy nowy wpis w Privy
+        const createResponse = await axios.post("https://auth.privy.io/api/v1/users", {
+            external_id: discordUserId
+        }, {
+            headers: { "Authorization": `Bearer ${process.env.PRIVY_SECRET_KEY}` }
+        });
+
+        console.log("✅ Privy user created:", createResponse.data.id);
+        return createResponse.data.id;
+
+    } catch (error: any) {
+        console.error("❌ Failed to fetch/create Privy user:", error.message);
+        return null;
+    }
+}
+

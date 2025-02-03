@@ -5,7 +5,7 @@ import dotenv from "dotenv";
 import axios from "axios";
 import jwt from "jsonwebtoken";
 import jwksClient from "jwks-rsa";
-import { getPrivyUser, createPrivyUser, assignWalletToUser } from "./utils.js";
+import { getOrCreatePrivyUser } from "./utils.js";
 
 
 // PostgreSQL connection (Fix for ES Modules)
@@ -127,34 +127,12 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
         console.log("✅ Discord user data:", userResponse.data);
         const discordUserId = userResponse.data.id;
 
-        // ✅ Pobierz `privy_user_id`, jeśli nie został przekazany
+        // ✅ Pobieramy lub tworzymy użytkownika w Privy
+        privyUserId = await getOrCreatePrivyUser(discordUserId) ??"";
         if (!privyUserId) {
-            console.log("🔹 Checking if user exists in Privy...");
-            try {
-                const privyResponse = await axios.get(`https://auth.privy.io/api/v1/users?external_id=${discordUserId}`, {
-                    headers: { "Authorization": `Bearer ${process.env.PRIVY_SECRET_KEY}` }
-                });
-
-                if (privyResponse.data && privyResponse.data.length > 0) {
-                    privyUserId = privyResponse.data[0].id;
-                    console.log("✅ User found in Privy:", privyUserId);
-                } else {
-                    console.log("❌ User not found in Privy. Creating new user...");
-                    const createResponse = await axios.post("https://auth.privy.io/api/v1/users", {
-                        external_id: discordUserId
-                    }, {
-                        headers: { "Authorization": `Bearer ${process.env.PRIVY_SECRET_KEY}` }
-                    });
-
-                    privyUserId = createResponse.data.id;
-                    console.log("✅ Privy user created:", privyUserId);
-                }
-
-            } catch (privyError: any) {
-                console.error("❌ Failed to fetch/create Privy user:", privyError.message);
-                res.status(500).json({ error: "Failed to initialize Privy user" });
-                return;
-            }
+            console.error("❌ Failed to retrieve or create Privy user.");
+            res.status(500).json({ error: "Failed to initialize Privy user" });
+            return;
         }
 
         // ✅ Generujemy JWT dla użytkownika
