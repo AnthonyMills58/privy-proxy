@@ -92,17 +92,19 @@ app.get("/login", (req: Request, res: Response) => {
  */
 app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     const code = req.query.code as string;
-    console.log("🔹 Received authorization code:", code); // ✅ Log the code
-    
-    if (!code) {
-        res.status(400).json({ error: "No code provided" });
+    const privyUserId = req.query.privy_user_id as string; // ✅ Expect `privy_user_id` from frontend
+
+    console.log("🔹 Received authorization code:", code);
+    console.log("🔹 Received privy_user_id:", privyUserId);
+
+    if (!code || !privyUserId) {
+        res.status(400).json({ error: "Missing code or privy_user_id" });
         return;
     }
 
     try {
-        console.log("🔹 Exchanging code for token..."); // ✅ Log token exchange start
-        // Exchange code for Discord access token
-        const tokenResponse = await axios.post("https://discord.com/api/oauth2/token", new URLSearchParams({
+        console.log("🔹 Exchanging code for token...");
+        const tokenResponse = await axios.post("https://discord.com/api/v10/oauth2/token", new URLSearchParams({
             client_id: process.env.DISCORD_CLIENT_ID!,
             client_secret: process.env.DISCORD_CLIENT_SECRET!,
             grant_type: "authorization_code",
@@ -110,34 +112,34 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
             redirect_uri: process.env.DISCORD_REDIRECT_URI!,
         }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
 
-        console.log("✅ Token exchange response:", tokenResponse.data); // ✅ Log token response
-
+        console.log("✅ Token exchange response:", tokenResponse.data);
         const accessToken = tokenResponse.data.access_token;
 
-        // Get user info from Discord API
+        console.log("🔹 Fetching user info...");
         const userResponse = await axios.get("https://discord.com/api/users/@me", {
             headers: { Authorization: `Bearer ${accessToken}` },
         });
 
-        console.log("✅ Discord user data:", userResponse.data); // ✅ Log user data
+        console.log("✅ Discord user data:", userResponse.data);
         const discordUserId = userResponse.data.id;
 
         // Generate JWT for user
-        const jwtToken = jwt.sign({ discordUserId }, process.env.PRIVY_SECRET_KEY!, { expiresIn: "1h" });
+        const jwtToken = jwt.sign({ privyUserId, discordUserId }, process.env.PRIVY_SECRET_KEY!, { expiresIn: "1h" });
 
-        // Store or update token in PostgreSQL
         await pool.query(
-            "INSERT INTO user_wallets (discord_id, privy_user_id, jwt, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour') ON CONFLICT (discord_id) DO UPDATE SET jwt = $3, expires_at = NOW() + INTERVAL '1 hour'",
-            [discordUserId, discordUserId, jwtToken]
+            "INSERT INTO user_wallets (discord_id, privy_user_id, wallet_address, jwt, expires_at) VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour') ON CONFLICT (privy_user_id, wallet_address) DO UPDATE SET jwt = $4, expires_at = NOW() + INTERVAL '1 hour'",
+            [discordUserId, privyUserId, "DEFAULT_WALLET", jwtToken]
         );
-        console.log("✅ User authenticated and JWT stored.");
 
+        console.log("✅ User authenticated and JWT stored.");
         res.json({ message: "Logged in successfully", token: jwtToken });
-    } catch (error) {
-        console.error("OAuth error:", error);
-        res.status(500).json({ error: "Failed to authenticate" });
+
+    } catch (error: any) {
+        console.error("❌ OAuth error:", error.response?.data || error.message);
+        res.status(500).json({ error: "Failed to authenticate", details: error.response?.data || error.message });
     }
 });
+
 
 
 /**
