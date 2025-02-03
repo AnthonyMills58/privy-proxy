@@ -211,10 +211,10 @@ app.post("/privy/setWallet", verifyJWT, async (req: Request, res: Response): Pro
             res.status(404).json({ error: "Wallet not found for this user." });
             return;
         }
-
+/*
         await pool.query("UPDATE user_wallets SET is_active = FALSE WHERE discord_id = $1", [user_id]);
         await pool.query("UPDATE user_wallets SET is_active = TRUE WHERE discord_id = $1 AND wallet_address = $2", [user_id, wallet_address]);
-
+*/
         res.json({ message: "Active wallet updated successfully." });
     } catch (error) {
         console.error("Database error:", error);
