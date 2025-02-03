@@ -92,16 +92,15 @@ app.get("/login", (req: Request, res: Response) => {
  */
 app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     const code = req.query.code as string;
-    const privyUserId = req.query.privy_user_id as string;
-    const walletAddress = "DEFAULT_WALLET"; // ✅ Ensure wallet_address is defined
+    let privyUserId = req.query.privy_user_id as string; // ✅ Może być pusty, więc sprawdzimy to niżej
+    const walletAddress = "DEFAULT_WALLET";
 
     console.log("🔹 Received authorization code:", code);
-    console.log("🔹 Received privy_user_id:", privyUserId);
-    console.log("🔹 Using wallet_address:", walletAddress);
+    console.log("🔹 Received privy_user_id:", privyUserId || "❌ Undefined (Will be fetched)");
 
-    if (!code || !privyUserId) {
-        console.error("❌ Missing required parameters.");
-        res.status(400).json({ error: "Missing code or privy_user_id" });
+    if (!code) {
+        console.error("❌ Missing authorization code.");
+        res.status(400).json({ error: "Missing code" });
         return;
     }
 
@@ -118,7 +117,7 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
         console.log("✅ Token exchange response:", tokenResponse.data);
         const accessToken = tokenResponse.data.access_token;
 
-        console.log("🔹 Fetching user info...");
+        console.log("🔹 Fetching user info from Discord...");
         const userResponse = await axios.get("https://discord.com/api/users/@me", {
             headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -126,10 +125,29 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
         console.log("✅ Discord user data:", userResponse.data);
         const discordUserId = userResponse.data.id;
 
-        // Generate JWT for user
+        // ✅ Pobierz `privy_user_id`, jeśli nie został przekazany
+        if (!privyUserId) {
+            console.log("🔹 Fetching or creating Privy user...");
+            try {
+                const privyResponse = await axios.post("https://auth.privy.io/api/v1/users", {
+                    discord_id: discordUserId
+                }, {
+                    headers: { "Authorization": `Bearer ${process.env.PRIVY_SECRET_KEY}` }
+                });
+
+                privyUserId = privyResponse.data.id;
+                console.log("✅ Privy user created or found:", privyUserId);
+            } catch (privyError: any) {
+                console.error("❌ Failed to fetch/create Privy user:", privyError.message);
+                res.status(500).json({ error: "Failed to initialize Privy user" });
+                return;
+            }
+        }
+
+        // ✅ Generujemy JWT dla użytkownika
         const jwtToken = jwt.sign({ privyUserId, discordUserId }, process.env.PRIVY_SECRET_KEY!, { expiresIn: "1h" });
 
-        console.log("🔹 Preparing to insert into database...");
+        console.log("🔹 Preparing to insert user into database...");
         console.log("   Discord ID:", discordUserId);
         console.log("   Privy User ID:", privyUserId);
         console.log("   Wallet Address:", walletAddress);
@@ -147,7 +165,6 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
             );
 
             console.log("✅ Inserted/Updated row:", result.rows[0]);
-
             res.json({ message: "Logged in successfully", token: jwtToken });
 
         } catch (dbError: any) {
@@ -155,13 +172,12 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
             res.status(500).json({ error: "Database insert/update failed", details: dbError.message });
         }
 
-        //res.json({ message: "Debugging: Reached end of function", token: jwtToken });
-
     } catch (error: any) {
         console.error("❌ OAuth error:", error.response?.data || error.message);
         res.status(500).json({ error: "Failed to authenticate", details: error.response?.data || error.message });
     }
 });
+
 
 
 
