@@ -92,6 +92,7 @@ app.get("/login", (req: Request, res: Response) => {
  */
 app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     const code = req.query.code as string;
+    console.log("🔹 Received authorization code:", code); // ✅ Log the code
     
     if (!code) {
         res.status(400).json({ error: "No code provided" });
@@ -99,6 +100,7 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
     }
 
     try {
+        console.log("🔹 Exchanging code for token..."); // ✅ Log token exchange start
         // Exchange code for Discord access token
         const tokenResponse = await axios.post("https://discord.com/api/oauth2/token", new URLSearchParams({
             client_id: process.env.DISCORD_CLIENT_ID!,
@@ -108,6 +110,8 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
             redirect_uri: process.env.DISCORD_REDIRECT_URI!,
         }), { headers: { "Content-Type": "application/x-www-form-urlencoded" } });
 
+        console.log("✅ Token exchange response:", tokenResponse.data); // ✅ Log token response
+
         const accessToken = tokenResponse.data.access_token;
 
         // Get user info from Discord API
@@ -115,6 +119,7 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
             headers: { Authorization: `Bearer ${accessToken}` },
         });
 
+        console.log("✅ Discord user data:", userResponse.data); // ✅ Log user data
         const discordUserId = userResponse.data.id;
 
         // Generate JWT for user
@@ -125,6 +130,7 @@ app.get("/callback", async (req: Request, res: Response): Promise<void> => {
             "INSERT INTO user_wallets (discord_id, privy_user_id, jwt, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour') ON CONFLICT (discord_id) DO UPDATE SET jwt = $3, expires_at = NOW() + INTERVAL '1 hour'",
             [discordUserId, discordUserId, jwtToken]
         );
+        console.log("✅ User authenticated and JWT stored.");
 
         res.json({ message: "Logged in successfully", token: jwtToken });
     } catch (error) {
